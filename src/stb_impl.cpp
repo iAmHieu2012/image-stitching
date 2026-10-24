@@ -1,10 +1,10 @@
 /**
  * @file stb_impl.cpp
- * @brief Compilation unit for stb_image and stb_image_write single-file libraries.
+ * @brief Compilation unit kích hoạt mã nguồn của thư viện stb_image và stb_image_write.
  *
- * External Source Citation:
- * - stb_image.h and stb_image_write.h by Sean Barrett (https://github.com/nothings/stb)
- *   Public Domain / MIT License.
+ * Nguồn thư viện bên ngoài:
+ * - stb_image.h và stb_image_write.h của Sean Barrett (https://github.com/nothings/stb)
+ *   Giấy phép: Public Domain / MIT License.
  */
 
 #define STB_IMAGE_IMPLEMENTATION

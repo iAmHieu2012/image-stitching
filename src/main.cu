@@ -1,12 +1,11 @@
 /**
  * @file main.cu
- * @brief Command-line entry point and benchmarking harness for Panorama Image Stitching.
+ * @brief CLI entry point và khung đo hiệu năng cho bài toán ghép ảnh Panorama.
  *
- * Usage:
+ * Cú pháp chạy:
  *   ./stitch <left_image> <right_image> <output_image> --version <0|1|2|...> [--runs N] [--gt <gt_file>]
  *
- * Course: CSC14120 - Parallel Programming (Final Project)
- * Authors: Group XX
+ * Tác giả: Group 18
  */
 
 #include "common.h"
@@ -26,6 +25,7 @@
 
 namespace {
 
+// In hướng dẫn sử dụng tham số dòng lệnh
 void print_usage(const char* prog) {
     std::fprintf(
         stderr,
@@ -34,6 +34,7 @@ void print_usage(const char* prog) {
     );
 }
 
+// Đọc file ảnh từ đĩa cứng vào bộ nhớ RAM dưới dạng RGB 3 kênh (uint8_t)
 bool load_image_rgb(const std::string& path, Image& img) {
     int w = 0, h = 0, c = 0;
     uint8_t* raw = stbi_load(path.c_str(), &w, &h, &c, 3);
@@ -48,6 +49,7 @@ bool load_image_rgb(const std::string& path, Image& img) {
     return true;
 }
 
+// Lưu ảnh RGB từ bộ nhớ RAM xuống file (.png hoặc .jpg)
 bool save_image_rgb(const std::string& path, const Image& img) {
     if (!img.data || img.width <= 0 || img.height <= 0) {
         return false;
@@ -67,6 +69,7 @@ bool save_image_rgb(const std::string& path, const Image& img) {
     return ok != 0;
 }
 
+// Đọc ma trận Homography chuẩn (Ground-Truth 3x3) từ file text để kiểm tra độ chính xác
 bool load_gt_homography(const std::string& path, Homography& H_gt) {
     std::ifstream ifs(path);
     if (!ifs.is_open()) {
@@ -85,6 +88,7 @@ bool load_gt_homography(const std::string& path, Homography& H_gt) {
     return true;
 }
 
+// Đánh giá sai số giữa ma trận Homography ước lượng (H_est) và Ground-Truth (H_gt)
 void evaluate_homography_error(const Homography& H_est, const Homography& H_gt, int wB, int hB) {
     double frob_sq = 0.0;
     for (int i = 0; i < 9; ++i) {
@@ -93,7 +97,7 @@ void evaluate_homography_error(const Homography& H_est, const Homography& H_gt, 
     }
     const double frob_err = std::sqrt(frob_sq);
 
-    // Compute mean reprojection error across 4 corners + center of Image B
+    // Tính sai số chiếu lại trung bình (pixel) trên 4 góc và tâm của Ảnh B
     const double pts[5][2] = {
         {0.0, 0.0},
         {static_cast<double>(wB - 1), 0.0},
@@ -142,6 +146,7 @@ int main(int argc, char** argv) {
     int num_runs = 5;
     std::string gt_path = "";
 
+    // Phân tích các cờ tham số dòng lệnh (--version, --runs, --gt)
     for (int i = 4; i < argc; ++i) {
         if (std::strcmp(argv[i], "--version") == 0 && i + 1 < argc) {
             version = std::atoi(argv[++i]);
@@ -169,6 +174,7 @@ int main(int argc, char** argv) {
     std::printf("Build Mode : CPU Sequential Build\n");
 #endif
 
+    // Đọc 2 ảnh đầu vào (không tính vào thời gian chạy pipeline theo quy định mục 4.2)
     Image imgA, imgB;
     if (!load_image_rgb(left_path, imgA) || !load_image_rgb(right_path, imgB)) {
         return EXIT_FAILURE;
@@ -192,11 +198,11 @@ int main(int argc, char** argv) {
         }
     };
 
-    // 1. Warm-up run (excluded from timing measurements)
+    // 1. Chạy làm nóng 1 lần (Warm-up run - không tính vào kết quả đo thời gian)
     Image warmup_out = run_version(warmup_timings, stats);
     warmup_out.free_data();
 
-    // 2. Timed runs
+    // 2. Chạy lặp N lần có bấm giờ để lấy thời gian trung bình (Avg) và nhỏ nhất (Min)
     StageTimings avg_t{};
     StageTimings min_t{};
     min_t.preprocess_ms = 1e18;
@@ -289,9 +295,7 @@ int main(int argc, char** argv) {
     std::printf("%-30s | %12.3f | %12.3f | %8.2f%%\n",
                 "Total End-to-End Time", avg_t.total_ms, min_t.total_ms, 100.0);
 
-    // Amdahl's Law Estimate:
-    // Scenario A: Stages 1, 2, 3, 4, 6 on GPU (leaving Stage 5 on CPU or refining on CPU)
-    // Scenario B: All 6 stages on GPU (only tiny host orchestration overhead remains)
+    // Ước lượng giới hạn tăng tốc theo Định luật Amdahl: Speedup_max = 1 / (1 - p)
     const double p_stages_12346 = (avg_t.preprocess_ms + avg_t.detect_ms + avg_t.describe_ms +
                                    avg_t.match_ms + avg_t.warp_blend_ms) / denom;
     const double p_all_6 = std::min(0.9999, sum_stages / denom);
@@ -302,6 +306,7 @@ int main(int argc, char** argv) {
     std::printf("Parallelizable fraction (All 6 Stages)     : p = %.4f -> Max Speedup = %.2fx\n",
                 p_all_6, 1.0 / std::max(1e-6, 1.0 - p_all_6));
 
+    // Lưu ảnh Panorama ra đĩa cứng (không tính vào thời gian chạy pipeline)
     if (!save_image_rgb(out_path, final_pano)) {
         std::fprintf(stderr, "Error: Failed to write output panorama to '%s'\n", out_path.c_str());
         final_pano.free_data();

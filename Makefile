@@ -1,5 +1,3 @@
-# Makefile for CSC14120 Parallel Programming - Panorama Image Stitching
-
 NVCC      := $(shell which nvcc 2>/dev/null || echo /opt/cuda/bin/nvcc)
 CXX       := g++
 CXXFLAGS  := -O3 -std=c++17 -Wall -Wextra

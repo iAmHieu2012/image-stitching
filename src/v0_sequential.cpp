@@ -1,17 +1,17 @@
 /**
  * @file v0_sequential.cpp
- * @brief V0: Single-threaded Sequential CPU implementation of the 6-stage Panorama Stitching Pipeline.
+ * @brief Phiên bản V0: Cài đặt tuần tự trên 1 luồng CPU cho toàn bộ 6 bước ghép ảnh Panorama.
  *
- * Course: CSC14120 - Parallel Programming (Final Project)
- * Authors: Group XX
+ * Tác giả: Group 18
  *
- * Algorithm & Literature References:
+ * Nguồn tham khảo thuật toán:
  * 1. Harris, C., & Stephens, M. (1988). "A Combined Corner and Edge Detector." Alvey Vision Conference.
  * 2. Rublee, E., Rabaud, V., Konolige, K., & Bradski, G. (2011). "ORB: An efficient alternative to SIFT or SURF." ICCV.
  * 3. Lowe, D. G. (2004). "Distinctive Image Features from Scale-Invariant Keypoints." IJCV.
  * 4. Hartley, R., & Zisserman, A. (2004). "Multiple View Geometry in Computer Vision" (2nd ed.).
  *    Cambridge University Press (Normalized DLT & RANSAC Homography estimation).
  * 5. Szeliski, R. (2022). "Computer Vision: Algorithms and Applications" (2nd ed.). Springer.
+ * 6. Sơn T. Trần, Việt .H Võ, Slide môn Thị giác máy tính (HCMUS)
  */
 
 #include "versions.h"
@@ -28,18 +28,23 @@ namespace {
 
 using Clock = std::chrono::high_resolution_clock;
 
+// Tính khoảng thời gian chạy (đơn vị: mili-giây) giữa 2 mốc thời gian
 inline double elapsed_ms(const Clock::time_point& t0, const Clock::time_point& t1) {
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 
+// Kẹp giá trị chỉ số v nằm trong đoạn [lo, hi] để xử lý biên ảnh an toàn
 inline int clamp_idx(int v, int lo, int hi) {
     return (v < lo) ? lo : ((v > hi) ? hi : v);
 }
 
 // ============================================================================
-// STAGE 1: PREPROCESSING (RGB -> Grayscale + 2D Gaussian Blur)
+// STAGE 1: TIỀN XỬ LÝ (Chuyển RGB sang ảnh xám Grayscale + Làm mờ Gaussian 2D)
 // ============================================================================
 
+/**
+ * @brief Chuyển ảnh màu RGB (uint8_t) sang ảnh đa mức xám (float trong đoạn [0, 255]).
+ */
 void rgb_to_grayscale(const Image& img, std::vector<float>& gray) {
     const int w = img.width;
     const int h = img.height;
@@ -51,11 +56,16 @@ void rgb_to_grayscale(const Image& img, std::vector<float>& gray) {
             const float r = static_cast<float>(img.data[idx + 0]);
             const float g = static_cast<float>(img.data[idx + 1]);
             const float b = static_cast<float>(img.data[idx + 2]);
+            // Công thức độ chói chuẩn ITU-R BT.601
             gray[static_cast<size_t>(y) * w + x] = 0.299f * r + 0.587f * g + 0.114f * b;
         }
     }
 }
 
+/**
+ * @brief Tạo ma trận nhân lọc (kernel) Gaussian 2D kích thước (2*radius + 1) x (2*radius + 1),
+ *        chuẩn hóa sao cho tổng các trọng số bằng 1.0f.
+ */
 std::vector<float> make_gaussian_kernel_2d(int radius, float sigma) {
     const int ksize = 2 * radius + 1;
     std::vector<float> kernel(ksize * ksize);
@@ -75,6 +85,9 @@ std::vector<float> make_gaussian_kernel_2d(int radius, float sigma) {
     return kernel;
 }
 
+/**
+ * @brief Tích chập 2D làm mờ ảnh xám bằng bộ lọc Gaussian để giảm nhiễu hạt trước khi tính đạo hàm.
+ */
 void gaussian_blur_2d(
     const std::vector<float>& src,
     std::vector<float>& dst,
@@ -103,9 +116,13 @@ void gaussian_blur_2d(
 }
 
 // ============================================================================
-// STAGE 2: KEYPOINT DETECTION (Harris Corner Detector + NMS + Top-K)
+// STAGE 2: PHÁT HIỆN ĐIỂM ĐẶC TRƯNG (Harris Corner Detector + NMS + Top-K)
 // ============================================================================
 
+/**
+ * @brief Phát hiện các góc đặc trưng bằng bộ dò góc Harris, triệt tiêu phi cực đại (NMS)
+ *        và chọn ra tối đa Top-K điểm có độ phản hồi góc lớn nhất.
+ */
 void detect_harris_keypoints(
     const std::vector<float>& blurred,
     int w,
@@ -118,7 +135,8 @@ void detect_harris_keypoints(
     std::vector<float> iy2(total_pixels, 0.0f);
     std::vector<float> ixy(total_pixels, 0.0f);
 
-    // Step 2.1: 3x3 Sobel gradients Ix, Iy and structure tensor products
+    // Bước 2.1: Tính đạo hàm bậc nhất theo chiều ngang (gx) và dọc (gy) bằng bộ lọc Sobel 3x3
+    // đồng thời tính các tích Ix^2, Iy^2, Ix*Iy tại từng pixel
     for (int y = 1; y < h - 1; ++y) {
         for (int x = 1; x < w - 1; ++x) {
             const float p00 = blurred[static_cast<size_t>(y - 1) * w + (x - 1)];
@@ -140,8 +158,10 @@ void detect_harris_keypoints(
         }
     }
 
-    // Step 2.2: 3x3 Window summation & Harris corner response R = det(M) - k * trace(M)^2
+    // Bước 2.2: Cộng dồn ma trận cấu trúc M trong cửa sổ 3x3 và tính độ phản hồi Harris:
+    // R = det(M) - k * (trace(M))^2
     std::vector<float> response(total_pixels, 0.0f);
+    // Chừa lề biên tối thiểu 16 pixel để bước trích xuất vùng 31x31 ở Stage 3 không tràn ra ngoài ảnh
     const int border = std::max(params.patch_radius + 1, 16);
 
     for (int y = border; y < h - border; ++y) {
@@ -166,7 +186,7 @@ void detect_harris_keypoints(
         }
     }
 
-    // Step 2.3: Non-Maximum Suppression (NMS) in (2*r+1)x(2*r+1) neighborhood
+    // Bước 2.3: Triệt tiêu phi cực đại (Non-Maximum Suppression - NMS) trong lân cận (2*r+1)x(2*r+1)
     keypoints.clear();
     const int r = params.nms_radius;
 
@@ -200,7 +220,7 @@ void detect_harris_keypoints(
         }
     }
 
-    // Step 2.4: Top-K selection sorted by descending response
+    // Bước 2.4: Sắp xếp giảm dần theo độ phản hồi R và chỉ giữ lại tối đa Top-K keypoints mạnh nhất
     if (static_cast<int>(keypoints.size()) > params.max_keypoints) {
         std::partial_sort(
             keypoints.begin(),
@@ -223,7 +243,7 @@ void detect_harris_keypoints(
 }
 
 // ============================================================================
-// STAGE 3: DESCRIPTION (Rotated BRIEF 256-bit / ORB-style Descriptor)
+// STAGE 3: MÔ TẢ ĐẶC TRƯNG (Rotated BRIEF 256-bit theo chuẩn ORB)
 // ============================================================================
 
 struct BriefPair {
@@ -231,9 +251,12 @@ struct BriefPair {
     int8_t dx2, dy2;
 };
 
+/**
+ * @brief Khởi tạo cố định 256 cặp tọa độ lấy mẫu trong [-10, 10] x [-10, 10] bằng seed cố định.
+ *        Khi xoay theo bất kỳ góc theta nào, tọa độ sau xoay vẫn nằm gọn trong bán kính 15 (patch 31x31).
+ */
 std::vector<BriefPair> generate_brief_pattern(uint32_t seed) {
     std::mt19937 rng(seed);
-    // Gaussian-like sampling inside [-10, 10] so rotated points by any angle stay within [-15, 15]
     std::normal_distribution<float> dist(0.0f, 4.5f);
     std::vector<BriefPair> pattern(256);
 
@@ -253,6 +276,10 @@ std::vector<BriefPair> generate_brief_pattern(uint32_t seed) {
     return pattern;
 }
 
+/**
+ * @brief Tính góc hướng chủ đạo (Intensity Centroid) và trích xuất descriptor nhị phân 256-bit (8 x uint32_t)
+ *        cho từng keypoint.
+ */
 void compute_rotated_brief_descriptors(
     const std::vector<float>& blurred,
     int w,
@@ -269,7 +296,7 @@ void compute_rotated_brief_descriptors(
         const int cx = static_cast<int>(keypoints[i].x);
         const int cy = static_cast<int>(keypoints[i].y);
 
-        // Step 3.1: Intensity Centroid orientation (Rublee et al., ORB 2011)
+        // Bước 3.1: Tính góc hướng của keypoint bằng trọng tâm cường độ sáng (Intensity Centroid)
         float m10 = 0.0f;
         float m01 = 0.0f;
         for (int dy = -patch_radius; dy <= patch_radius; ++dy) {
@@ -289,7 +316,7 @@ void compute_rotated_brief_descriptors(
         const float cos_t = std::cos(angle);
         const float sin_t = std::sin(angle);
 
-        // Step 3.2: 256-bit Rotated BRIEF comparison
+        // Bước 3.2: Xoay 256 cặp điểm mẫu theo góc `angle` và so sánh độ sáng để tạo 256-bit descriptor
         Descriptor desc{};
         for (int k = 0; k < 8; ++k) {
             desc.bits[k] = 0u;
@@ -312,6 +339,7 @@ void compute_rotated_brief_descriptors(
             const float v2 = blurred[static_cast<size_t>(y2) * w + x2];
 
             if (v1 < v2) {
+                // Bật bit thứ (b % 32) trong từ 32-bit thứ (b / 32)
                 desc.bits[b >> 5] |= (1u << (b & 31));
             }
         }
@@ -320,9 +348,12 @@ void compute_rotated_brief_descriptors(
 }
 
 // ============================================================================
-// STAGE 4: MATCHING (Brute-Force Hamming Distance + Lowe's Ratio Test)
+// STAGE 4: SO KHỚP ĐẶC TRƯNG (Brute-Force Hamming + Lowe's Ratio Test + Cross-Check)
 // ============================================================================
 
+/**
+ * @brief Tính khoảng cách Hamming (số bit khác nhau) giữa hai descriptor 256-bit.
+ */
 inline int hamming_distance_256(const Descriptor& a, const Descriptor& b) {
     int dist = 0;
     for (int k = 0; k < 8; ++k) {
@@ -331,6 +362,10 @@ inline int hamming_distance_256(const Descriptor& a, const Descriptor& b) {
     return dist;
 }
 
+/**
+ * @brief So khớp vét cạn (Brute-Force) giữa tập descriptor của ảnh A và ảnh B,
+ *        kết hợp kiểm định tỉ số Lowe (Ratio Test) và kiểm tra chéo 2 chiều (Mutual Cross-Check).
+ */
 void match_descriptors(
     const std::vector<Descriptor>& descA,
     const std::vector<Descriptor>& descB,
@@ -345,7 +380,7 @@ void match_descriptors(
     const int nA = static_cast<int>(descA.size());
     const int nB = static_cast<int>(descB.size());
 
-    // Forward matching A -> B with Lowe's Ratio Test
+    // Chiều thuận A -> B: Tìm điểm gần nhất (best_d) và gần nhì (second_d), áp dụng Lowe's Ratio Test
     std::vector<int> best_idx_AtoB(nA, -1);
     std::vector<int> best_dist_AtoB(nA, 256);
 
@@ -373,7 +408,7 @@ void match_descriptors(
         }
     }
 
-    // Reverse nearest neighbor B -> A for mutual cross-check
+    // Chiều ngược B -> A: Tìm láng giềng gần nhất trên A cho mỗi điểm trên B để kiểm tra chéo (Cross-Check)
     std::vector<int> best_idx_BtoA(nB, -1);
     for (int j = 0; j < nB; ++j) {
         int best_d = 256;
@@ -388,6 +423,7 @@ void match_descriptors(
         best_idx_BtoA[j] = best_i;
     }
 
+    // Chỉ giữ lại các cặp (i, j) khớp đồng thuận cả 2 chiều
     for (int i = 0; i < nA; ++i) {
         const int j = best_idx_AtoB[i];
         if (j >= 0 && best_idx_BtoA[j] == i) {
@@ -401,14 +437,16 @@ void match_descriptors(
 }
 
 // ============================================================================
-// STAGE 5: HOMOGRAPHY ESTIMATION (RANSAC + Normalized 4-Point DLT + Refinement)
+// STAGE 5: ƯỚC LƯỢNG MA TRẬN HOMOGRAPHY (RANSAC + Normalized 4-Point DLT + Refinement)
 // ============================================================================
 
 /**
- * @brief Solves an 8x8 linear system A * x = b using Gaussian Elimination with partial pivoting.
+ * @brief Giải hệ phương trình tuyến tính 8 ẩn (ma trận mở rộng 8x9) bằng phương pháp
+ *        Khử Gauss có chọn phần tử trụ lớn nhất theo cột (Partial Pivoting).
  */
 bool solve_linear_8x8(double A[8][9], double x_out[8]) {
     for (int col = 0; col < 8; ++col) {
+        // Tìm hàng có trị tuyệt đối lớn nhất ở cột `col` làm phần tử trụ (pivot)
         int pivot_row = col;
         double max_val = std::fabs(A[col][col]);
         for (int row = col + 1; row < 8; ++row) {
@@ -420,7 +458,7 @@ bool solve_linear_8x8(double A[8][9], double x_out[8]) {
         }
 
         if (max_val < 1e-11) {
-            return false; // Singular or nearly singular matrix
+            return false; // Ma trận suy biến (4 điểm thẳng hàng hoặc trùng nhau)
         }
 
         if (pivot_row != col) {
@@ -429,6 +467,7 @@ bool solve_linear_8x8(double A[8][9], double x_out[8]) {
             }
         }
 
+        // Khử xuôi các hàng bên dưới hàng trụ
         const double pivot = A[col][col];
         for (int row = col + 1; row < 8; ++row) {
             const double factor = A[row][col] / pivot;
@@ -438,7 +477,7 @@ bool solve_linear_8x8(double A[8][9], double x_out[8]) {
         }
     }
 
-    // Back-substitution
+    // Thế ngược từ hàng 7 về hàng 0 để tìm nghiệm x_out[0..7]
     for (int row = 7; row >= 0; --row) {
         double sum = A[row][8];
         for (int col = row + 1; col < 8; ++col) {
@@ -450,8 +489,8 @@ bool solve_linear_8x8(double A[8][9], double x_out[8]) {
 }
 
 /**
- * @brief Estimates a 3x3 Homography matrix H (p_A ~ H * p_B) from N >= 4 point correspondences
- *        using Hartley Normalization and Direct Linear Transform (DLT) normal equations.
+ * @brief Ước lượng ma trận Homography 3x3 H (ánh xạ p_A ~ H * p_B) từ N >= 4 cặp điểm tương ứng
+ *        bằng phương pháp Chuẩn hóa Hartley (Hartley Normalization) kết hợp hệ phương trình chuẩn DLT.
  */
 bool compute_normalized_dlt_homography(
     const std::vector<Keypoint>& kpA,
@@ -463,7 +502,7 @@ bool compute_normalized_dlt_homography(
 ) {
     if (num_samples < 4) return false;
 
-    // 1. Compute centroids for Hartley Normalization
+    // 1. Tính tọa độ trọng tâm của tập điểm trên ảnh A và ảnh B
     double mean_xA = 0.0, mean_yA = 0.0;
     double mean_xB = 0.0, mean_yB = 0.0;
     for (int k = 0; k < num_samples; ++k) {
@@ -478,7 +517,7 @@ bool compute_normalized_dlt_homography(
     mean_xB /= num_samples;
     mean_yB /= num_samples;
 
-    // 2. Compute mean distances to centroids
+    // 2. Tính khoảng cách trung bình từ các điểm tới trọng tâm để co giãn về sqrt(2)
     double dist_A = 0.0, dist_B = 0.0;
     for (int k = 0; k < num_samples; ++k) {
         const Match& m = matches[sample_indices[k]];
@@ -499,7 +538,7 @@ bool compute_normalized_dlt_homography(
     const double scale_A = std::sqrt(2.0) / dist_A;
     const double scale_B = std::sqrt(2.0) / dist_B;
 
-    // 3. Accumulate Normal Equations (A^T * A) * h = A^T * b for 8 unknowns (with h_8 = 1)
+    // 3. Lập hệ phương trình chuẩn bình phương tối thiểu (A^T * A) * h = A^T * b cho 8 ẩn (cố định h_8 = 1)
     double ATA[8][9] = {{0.0}};
 
     for (int k = 0; k < num_samples; ++k) {
@@ -509,11 +548,11 @@ bool compute_normalized_dlt_homography(
         const double uB = (kpB[m.idxB].x - mean_xB) * scale_B;
         const double vB = (kpB[m.idxB].y - mean_yB) * scale_B;
 
-        // Row 1: [ uB, vB, 1,  0,  0, 0, -uA*uB, -uA*vB ] * h = uA
+        // Phương trình ngang: [ uB, vB, 1,  0,  0, 0, -uA*uB, -uA*vB ] * h = uA
         const double r1[8] = { uB, vB, 1.0, 0.0, 0.0, 0.0, -uA * uB, -uA * vB };
         const double b1 = uA;
 
-        // Row 2: [  0,  0, 0, uB, vB, 1, -vA*uB, -vA*vB ] * h = vA
+        // Phương trình dọc:   [  0,  0, 0, uB, vB, 1, -vA*uB, -vA*vB ] * h = vA
         const double r2[8] = { 0.0, 0.0, 0.0, uB, vB, 1.0, -vA * uB, -vA * vB };
         const double b2 = vA;
 
@@ -536,9 +575,7 @@ bool compute_normalized_dlt_homography(
         h_norm[6], h_norm[7], 1.0
     };
 
-    // 4. Denormalize: H = T_A^{-1} * Hn * T_B
-    // where T_B = [ scale_B, 0, -scale_B * mean_xB; 0, scale_B, -scale_B * mean_yB; 0, 0, 1 ]
-    // and T_A^{-1} = [ 1/scale_A, 0, mean_xA; 0, 1/scale_A, mean_yA; 0, 0, 1 ]
+    // 4. Khử chuẩn hóa (Denormalization): H = T_A^{-1} * Hn * T_B
     const double TB[9] = {
         scale_B, 0.0, -scale_B * mean_xB,
         0.0, scale_B, -scale_B * mean_yB,
@@ -570,6 +607,7 @@ bool compute_normalized_dlt_homography(
     if (std::fabs(H_out.h[8]) < 1e-12) {
         return false;
     }
+    // Chuẩn hóa lại ma trận sao cho phần tử cuối H[2][2] (tức h[8]) = 1.0
     const double inv_h8 = 1.0 / H_out.h[8];
     for (int i = 0; i < 9; ++i) {
         H_out.h[i] *= inv_h8;
@@ -577,6 +615,9 @@ bool compute_normalized_dlt_homography(
     return true;
 }
 
+/**
+ * @brief Tìm ma trận Homography tốt nhất bằng thuật toán RANSAC và tinh chỉnh lại trên tập Inliers.
+ */
 void estimate_homography_ransac(
     const std::vector<Keypoint>& kpA,
     const std::vector<Keypoint>& kpB,
@@ -600,7 +641,7 @@ void estimate_homography_ransac(
     double best_error_sum = std::numeric_limits<double>::max();
 
     for (int iter = 0; iter < params.ransac_iters; ++iter) {
-        // Sample 4 distinct match indices
+        // Chọn ngẫu nhiên 4 chỉ số cặp điểm phân biệt
         int sample[4];
         for (int s = 0; s < 4; ++s) {
             bool unique = false;
@@ -621,6 +662,7 @@ void estimate_homography_ransac(
             continue;
         }
 
+        // Đếm số lượng điểm khớp thuận (Inliers) thỏa mãn sai số chiếu lại < ransac_thresh
         int inlier_count = 0;
         double error_sum = 0.0;
 
@@ -630,7 +672,7 @@ void estimate_homography_ransac(
 
             const double w = H_cand.h[6] * pB.x + H_cand.h[7] * pB.y + H_cand.h[8];
             if (w <= 1e-5) {
-                continue; // Reject points behind camera / projective flip
+                continue; // Loại bỏ các phép chiếu bị lật ra sau mặt phẳng camera
             }
             const double inv_w = 1.0 / w;
             const double proj_x = (H_cand.h[0] * pB.x + H_cand.h[1] * pB.y + H_cand.h[2]) * inv_w;
@@ -646,6 +688,7 @@ void estimate_homography_ransac(
             }
         }
 
+        // Cập nhật giả thuyết tốt nhất nếu có nhiều inliers hơn (hoặc bằng nhưng tổng sai số nhỏ hơn)
         if (inlier_count > best_inliers ||
             (inlier_count == best_inliers && inlier_count > 0 && error_sum < best_error_sum)) {
             best_inliers = inlier_count;
@@ -654,7 +697,7 @@ void estimate_homography_ransac(
         }
     }
 
-    // Least-squares refinement over all inliers of the winning RANSAC hypothesis
+    // Bước tinh chỉnh (Least-Squares Refinement): giải lại DLT trên toàn bộ tập Inliers của giả thuyết tốt nhất
     if (best_inliers >= 4) {
         std::vector<int> inlier_indices;
         inlier_indices.reserve(best_inliers);
@@ -705,9 +748,12 @@ void estimate_homography_ransac(
 }
 
 // ============================================================================
-// STAGE 6: WARPING & BLENDING (Inverse Warping + Bilinear + Linear Feathering)
+// STAGE 6: BIẾN ĐỔI HÌNH HỌC & HÒA TRỘN ẢNH (Inverse Warping + Bilinear + Feathering)
 // ============================================================================
 
+/**
+ * @brief Tính ma trận nghịch đảo H^{-1} kích thước 3x3 bằng định thức và ma trận phụ hợp (adjugate).
+ */
 bool invert_homography_3x3(const Homography& H, Homography& H_inv) {
     const double* m = H.h;
     const double c00 =  (m[4] * m[8] - m[5] * m[7]);
@@ -740,6 +786,9 @@ bool invert_homography_3x3(const Homography& H, Homography& H_inv) {
     return true;
 }
 
+/**
+ * @brief Lấy mẫu màu RGB tại tọa độ thực (u, v) bằng nội suy song tuyến tính (Bilinear Interpolation).
+ */
 inline void sample_bilinear_rgb(const Image& img, float u, float v, float rgb_out[3]) {
     const int x0 = static_cast<int>(std::floor(u));
     const int y0 = static_cast<int>(std::floor(v));
@@ -763,13 +812,17 @@ inline void sample_bilinear_rgb(const Image& img, float u, float v, float rgb_ou
     }
 }
 
+/**
+ * @brief Biến đổi ảnh B về hệ tọa độ của ảnh A bằng Inverse Warping và hòa trộn vùng chồng lắp
+ *        bằng trọng số khoảng cách tới biên (Linear Feathering).
+ */
 Image warp_and_blend(const Image& imgA, const Image& imgB, const Homography& H) {
     Homography H_inv;
     if (!invert_homography_3x3(H, H_inv)) {
         H_inv = Homography{};
     }
 
-    // Project 4 corners of Image B into Image A's coordinate frame
+    // Chiếu 4 góc của ảnh B qua ma trận H sang hệ quy chiếu của ảnh A để tìm khung bao (Bounding Box)
     const double corners_B[4][2] = {
         {0.0, 0.0},
         {static_cast<double>(imgB.width - 1), 0.0},
@@ -796,7 +849,7 @@ Image warp_and_blend(const Image& imgA, const Image& imgB, const Homography& H) 
         }
     }
 
-    // Clamp bounding box to prevent degenerate homographies from allocating huge canvases
+    // Giới hạn kích thước khung ảnh tối đa để tránh tràn bộ nhớ khi gặp cặp ảnh lỗi suy biến
     const double max_span_w = static_cast<double>(imgA.width) * 2.5;
     const double max_span_h = static_cast<double>(imgA.height) * 2.0;
     min_x = std::max(min_x, -max_span_w);
@@ -824,7 +877,7 @@ Image warp_and_blend(const Image& imgA, const Image& imgB, const Homography& H) 
             const int xA = x_out + offset_x;
             const bool in_A = in_A_y && (xA >= 0 && xA < imgA.width);
 
-            // Inverse warp (xA, yA) -> (uB, vB) in Image B
+            // Ánh xạ ngược (Inverse Warp) từ tọa độ (xA, yA) về tọa độ thực (uB, vB) trên ảnh B
             const double denom = H_inv.h[6] * xA + H_inv.h[7] * yA + H_inv.h[8];
             bool in_B = false;
             float uB = 0.0f;
@@ -842,7 +895,7 @@ Image warp_and_blend(const Image& imgA, const Image& imgB, const Homography& H) 
             uint8_t* dst_pixel = pano.data + (static_cast<size_t>(y_out) * out_w + x_out) * 3;
 
             if (in_A && in_B) {
-                // Distance-to-boundary feathering weight
+                // Vùng chồng lắp: tính trọng số feathering dựa trên khoảng cách tới mép gần nhất của mỗi ảnh
                 const float dist_A = std::min({
                     static_cast<float>(xA),
                     wA_max - static_cast<float>(xA),
@@ -889,7 +942,7 @@ Image warp_and_blend(const Image& imgA, const Image& imgB, const Homography& H) 
 } // anonymous namespace
 
 // ============================================================================
-// PUBLIC PIPELINE ENTRY POINT FOR V0
+// HÀM GIAO DIỆN CHÍNH CỦA PHIÊN BẢN V0
 // ============================================================================
 
 Image stitch_v0(
@@ -902,7 +955,7 @@ Image stitch_v0(
     const auto t_pipeline_start = Clock::now();
 
     // ------------------------------------------------------------------------
-    // Stage 1: Preprocessing (Grayscale + 2D Gaussian Blur)
+    // Stage 1: Tiền xử lý (Chuyển ảnh xám + Làm mờ Gaussian 2D)
     // ------------------------------------------------------------------------
     const auto t1_start = Clock::now();
     const std::vector<float> gauss_kernel = make_gaussian_kernel_2d(params.gaussian_radius, params.gaussian_sigma);
@@ -915,7 +968,7 @@ Image stitch_v0(
     timings.preprocess_ms = elapsed_ms(t1_start, t1_end);
 
     // ------------------------------------------------------------------------
-    // Stage 2: Keypoint Detection (Harris Corner + NMS + Top-K)
+    // Stage 2: Phát hiện điểm đặc trưng (Harris Corner + NMS + Top-K)
     // ------------------------------------------------------------------------
     const auto t2_start = Clock::now();
     std::vector<Keypoint> kpA, kpB;
@@ -925,7 +978,7 @@ Image stitch_v0(
     timings.detect_ms = elapsed_ms(t2_start, t2_end);
 
     // ------------------------------------------------------------------------
-    // Stage 3: Description (Rotated BRIEF 256-bit)
+    // Stage 3: Mô tả đặc trưng (Rotated BRIEF 256-bit)
     // ------------------------------------------------------------------------
     const auto t3_start = Clock::now();
     const std::vector<BriefPair> brief_pattern = generate_brief_pattern(params.random_seed);
@@ -936,7 +989,7 @@ Image stitch_v0(
     timings.describe_ms = elapsed_ms(t3_start, t3_end);
 
     // ------------------------------------------------------------------------
-    // Stage 4: Feature Matching (Brute-Force Hamming + Lowe's Ratio Test)
+    // Stage 4: So khớp đặc trưng (Brute-Force Hamming + Lowe's Ratio Test + Cross-Check)
     // ------------------------------------------------------------------------
     const auto t4_start = Clock::now();
     std::vector<Match> matches;
@@ -945,7 +998,7 @@ Image stitch_v0(
     timings.match_ms = elapsed_ms(t4_start, t4_end);
 
     // ------------------------------------------------------------------------
-    // Stage 5: Homography Estimation (RANSAC + Normalized 4-Point DLT)
+    // Stage 5: Ước lượng Homography (RANSAC + Normalized 4-Point DLT + Refinement)
     // ------------------------------------------------------------------------
     const auto t5_start = Clock::now();
     Homography best_H;
@@ -955,7 +1008,7 @@ Image stitch_v0(
     timings.homography_ms = elapsed_ms(t5_start, t5_end);
 
     // ------------------------------------------------------------------------
-    // Stage 6: Warping & Blending (Inverse Warping + Bilinear + Feathering)
+    // Stage 6: Biến đổi & Hòa trộn ảnh (Inverse Warping + Bilinear + Feathering)
     // ------------------------------------------------------------------------
     const auto t6_start = Clock::now();
     Image pano = warp_and_blend(imgA, imgB, best_H);

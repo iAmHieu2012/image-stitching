@@ -1,60 +1,68 @@
 /**
  * @file cuda_utils.cuh
- * @brief CUDA error checking macros and CUDA event timing utilities.
+ * @brief Macro kiểm tra lỗi CUDA (CHECK) và bộ đo thời gian GPU (GpuTimer) dùng CUDA Events.
  *
- * Course: CSC14120 - Parallel Programming (Final Project)
- * Authors: Group XX
+ * Tham khảo: Source code demo lý thuyết của thầy Phạm Trọng Nghĩa
  */
 
 #ifndef CUDA_UTILS_CUH
 #define CUDA_UTILS_CUH
 
-#include <cstdio>
-#include <cstdlib>
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifdef __CUDACC__
 #include <cuda_runtime.h>
 
-#define CUDA_CHECK(call)                                                         \
-    do {                                                                         \
-        cudaError_t err = (call);                                                \
-        if (err != cudaSuccess) {                                                \
-            std::fprintf(stderr, "CUDA Error at %s:%d - %s\n", __FILE__,         \
-                         __LINE__, cudaGetErrorString(err));                     \
-            std::exit(EXIT_FAILURE);                                             \
-        }                                                                        \
-    } while (0)
+// Macro kiểm tra lỗi trả về của các hàm CUDA Runtime API
+#define CHECK(call)\
+{\
+    const cudaError_t error = call;\
+    if (error != cudaSuccess)\
+    {\
+        fprintf(stderr, "Error: %s:%d, ", __FILE__, __LINE__);\
+        fprintf(stderr, "code: %d, reason: %s\n", error,\
+                cudaGetErrorString(error));\
+        exit(EXIT_FAILURE);\
+    }\
+}
 
-/**
- * @brief Helper class for accurate GPU kernel timing using CUDA events.
- */
-class CudaTimer {
-public:
-    CudaTimer() {
-        CUDA_CHECK(cudaEventCreate(&start_));
-        CUDA_CHECK(cudaEventCreate(&stop_));
+// Cấu trúc đo thời gian thực thi trên GPU bằng CUDA Events
+struct GpuTimer
+{
+    cudaEvent_t start;
+    cudaEvent_t stop;
+
+    GpuTimer()
+    {
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
     }
 
-    ~CudaTimer() {
-        cudaEventDestroy(start_);
-        cudaEventDestroy(stop_);
+    ~GpuTimer()
+    {
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
     }
 
-    void start(cudaStream_t stream = 0) {
-        CUDA_CHECK(cudaEventRecord(start_, stream));
+    void Start()
+    {
+        cudaEventRecord(start, 0);
+        cudaEventSynchronize(start);
     }
 
-    float stop(cudaStream_t stream = 0) {
-        CUDA_CHECK(cudaEventRecord(stop_, stream));
-        CUDA_CHECK(cudaEventSynchronize(stop_));
-        float elapsed_ms = 0.0f;
-        CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start_, stop_));
-        return elapsed_ms;
+    void Stop()
+    {
+        cudaEventRecord(stop, 0);
     }
 
-private:
-    cudaEvent_t start_;
-    cudaEvent_t stop_;
+    float Elapsed()
+    {
+        float elapsed;
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&elapsed, start, stop);
+        return elapsed;
+    }
 };
 #endif // __CUDACC__
 

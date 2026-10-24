@@ -1,9 +1,8 @@
 /**
  * @file common.h
- * @brief Common data structures, parameters, and timing definitions for Panorama Image Stitching.
+ * @brief Định nghĩa các cấu trúc dữ liệu, tham số cấu hình và bộ đo thời gian dùng chung cho bài toán ghép ảnh Panorama.
  *
- * Course: CSC14120 - Parallel Programming (Final Project)
- * Authors: Group XX
+ * Tác giả: Group 18
  */
 
 #ifndef COMMON_H
@@ -16,7 +15,7 @@
 #include <vector>
 
 /**
- * @brief Represents an RGB image in row-major interleaved format (R, G, B).
+ * @brief Biểu diễn ảnh màu RGB lưu trữ theo thứ tự hàng (row-major interleaved: R, G, B).
  */
 struct Image {
     int width = 0;
@@ -43,24 +42,24 @@ struct Image {
 };
 
 /**
- * @brief Represents a detected 2D feature keypoint.
+ * @brief Biểu diễn một điểm đặc trưng 2D (Keypoint) trên ảnh.
  */
 struct Keypoint {
     float x = 0.0f;
     float y = 0.0f;
     float response = 0.0f;
-    float angle = 0.0f; // Orientation in radians (for Rotated BRIEF)
+    float angle = 0.0f; // Góc hướng tính bằng radian (dùng cho Rotated BRIEF)
 };
 
 /**
- * @brief 256-bit binary feature descriptor (8 x 32-bit unsigned integers).
+ * @brief Vector mô tả nhị phân 256-bit (gồm 8 số nguyên không dấu 32-bit).
  */
 struct Descriptor {
     uint32_t bits[8];
 };
 
 /**
- * @brief Represents a matched pair of keypoints between Image A and Image B.
+ * @brief Biểu diễn một cặp keypoint khớp nhau giữa Ảnh A và Ảnh B.
  */
 struct Match {
     int idxA = -1;
@@ -69,7 +68,7 @@ struct Match {
 };
 
 /**
- * @brief 3x3 Projective Homography matrix mapping points in Image B to Image A:
+ * @brief Ma trận biến đổi phối cảnh Homography 3x3 ánh xạ điểm từ Ảnh B sang Ảnh A:
  *        p_A ~ H * p_B
  */
 struct Homography {
@@ -81,40 +80,40 @@ struct Homography {
 };
 
 /**
- * @brief Configurable pipeline parameters (kept identical across all versions V0, V1, V2...).
+ * @brief Bộ siêu tham số của pipeline (giữ cố định giống nhau ở mọi phiên bản V0, V1, V2...).
  */
 struct StitchParams {
-    int gaussian_radius = 2;        // 5x5 Gaussian kernel (radius = 2)
-    float gaussian_sigma = 1.4f;    // Standard deviation for Gaussian blur
-    float harris_k = 0.04f;         // Harris detector sensitivity factor
-    float harris_thresh = 1e4f;     // Minimum Harris corner response threshold
-    int nms_radius = 2;             // 5x5 Non-Maximum Suppression window (radius = 2)
-    int max_keypoints = 3000;       // Top-K keypoints retained per image
-    int patch_radius = 15;          // 31x31 patch radius for Rotated BRIEF
-    float ratio_thresh = 0.75f;     // Lowe's ratio test threshold
-    int max_hamming_dist = 64;      // Maximum acceptable Hamming distance
-    int ransac_iters = 2000;        // Number of RANSAC iterations
-    float ransac_thresh = 3.0f;     // RANSAC inlier reprojection threshold (pixels)
-    uint32_t random_seed = 42;      // Fixed PRNG seed for reproducibility across versions
+    int gaussian_radius = 2;        // Bán kính bộ lọc Gaussian 5x5 (radius = 2)
+    float gaussian_sigma = 1.4f;    // Độ lệch chuẩn sigma cho làm mờ Gaussian
+    float harris_k = 0.04f;         // Hệ số nhạy của bộ dò góc Harris
+    float harris_thresh = 1e4f;     // Ngưỡng phản hồi góc Harris tối thiểu
+    int nms_radius = 2;             // Bán kính cửa sổ NMS 5x5 (radius = 2)
+    int max_keypoints = 3000;       // Số lượng keypoints tối đa giữ lại (Top-K) trên mỗi ảnh
+    int patch_radius = 15;          // Bán kính vùng lân cận 31x31 cho Rotated BRIEF
+    float ratio_thresh = 0.75f;     // Ngưỡng kiểm định tỉ số Lowe (Lowe's ratio test)
+    int max_hamming_dist = 64;      // Khoảng cách Hamming tối đa chấp nhận được
+    int ransac_iters = 2000;        // Số vòng lặp RANSAC
+    float ransac_thresh = 3.0f;     // Ngưỡng sai số chiếu lại (pixel) để tính là Inlier trong RANSAC
+    uint32_t random_seed = 42;      // Seed cố định để tái lập kết quả đồng nhất giữa các phiên bản
 };
 
 /**
- * @brief Execution timings (in milliseconds) for each of the 6 pipeline stages.
+ * @brief Thời gian chạy (đơn vị: mili-giây) của từng bước trong 6 bước của pipeline.
  */
 struct StageTimings {
-    double preprocess_ms = 0.0;     // Stage 1: RGB to Grayscale + Gaussian Blur
-    double detect_ms = 0.0;         // Stage 2: Harris Corner + NMS + Top-K
-    double describe_ms = 0.0;       // Stage 3: Rotated BRIEF 256-bit Description
-    double match_ms = 0.0;          // Stage 4: Brute-Force Hamming Matching + Ratio Test
+    double preprocess_ms = 0.0;     // Stage 1: Chuyển RGB sang Grayscale + Làm mờ Gaussian
+    double detect_ms = 0.0;         // Stage 2: Dò góc Harris + NMS + Chọn Top-K
+    double describe_ms = 0.0;       // Stage 3: Mô tả đặc trưng Rotated BRIEF 256-bit
+    double match_ms = 0.0;          // Stage 4: So khớp Brute-Force Hamming + Ratio Test + Cross-Check
     double homography_ms = 0.0;     // Stage 5: RANSAC + 4-point Normalized DLT + Refinement
-    double warp_blend_ms = 0.0;     // Stage 6: Inverse Warping + Bilinear + Feathering
-    double h2d_ms = 0.0;            // Host-to-Device transfer time (0 for V0)
-    double d2h_ms = 0.0;            // Device-to-Host transfer time (0 for V0)
-    double total_ms = 0.0;          // End-to-end pipeline execution time
+    double warp_blend_ms = 0.0;     // Stage 6: Inverse Warping + Bilinear + Linear Feathering
+    double h2d_ms = 0.0;            // Thời gian copy dữ liệu Host -> Device (bằng 0 ở V0)
+    double d2h_ms = 0.0;            // Thời gian copy dữ liệu Device -> Host (bằng 0 ở V0)
+    double total_ms = 0.0;          // Tổng thời gian thực thi toàn bộ pipeline (End-to-End)
 };
 
 /**
- * @brief Diagnostic statistics from a pipeline execution.
+ * @brief Các thông số thống kê kết quả sau khi chạy pipeline.
  */
 struct StitchStats {
     int num_kp_A = 0;

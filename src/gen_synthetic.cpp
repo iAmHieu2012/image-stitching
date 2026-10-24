@@ -1,7 +1,7 @@
 /**
  * @file gen_synthetic.cpp
- * @brief Generates a synthetic overlapping stereo pair (1280x720, 1920x1080, 3840x2160)
- *        with a known Ground-Truth Homography H_gt for testing V0 correctness and timing.
+ * @brief Sinh bộ ảnh kiểm thử giả lập (1280x720, 1920x1080, 3840x2160)
+ *        kèm ma trận Homography chuẩn (Ground-Truth H_gt) để kiểm tra độ chính xác và đo thời gian V0.
  */
 
 #include "common.h"
@@ -22,11 +22,12 @@ struct RectShape {
     uint8_t r, g, b;
 };
 
+// Vẽ bức cảnh tổng thể chứa các hình khối kiến trúc/cửa sổ có góc cạnh sắc nét để kiểm thử
 void render_canvas(Image& canvas) {
     const int W = canvas.width;
     const int H = canvas.height;
 
-    // Sky/ground smooth gradient background
+    // Nền chuyển màu (gradient) bầu trời và mặt đất
     for (int y = 0; y < H; ++y) {
         for (int x = 0; x < W; ++x) {
             uint8_t* p = canvas.data + (static_cast<size_t>(y) * W + x) * 3;
@@ -36,7 +37,7 @@ void render_canvas(Image& canvas) {
         }
     }
 
-    // Deterministic rich geometric shapes (buildings, windows, checkerboards, stars) with crisp corners
+    // Sinh cố định 280 khối hình chữ nhật xoay góc có họa tiết lưới ô cờ bên trong
     std::mt19937 rng(2026);
     std::uniform_real_distribution<float> ux(0.05f * W, 0.95f * W);
     std::uniform_real_distribution<float> uy(0.08f * H, 0.92f * H);
@@ -73,7 +74,6 @@ void render_canvas(Image& canvas) {
                 const float lx =  dx * cos_a + dy * sin_a;
                 const float ly = -dx * sin_a + dy * cos_a;
                 if (std::fabs(lx) <= s.w * 0.5f && std::fabs(ly) <= s.h * 0.5f) {
-                    // Add internal window grid / checkerboard for rich local descriptor bit patterns
                     const int gx = static_cast<int>((lx + s.w * 0.5f) / std::max(4.0f, s.w * 0.25f));
                     const int gy = static_cast<int>((ly + s.h * 0.5f) / std::max(4.0f, s.h * 0.25f));
                     const bool parity = ((gx + gy) & 1) != 0;
@@ -87,25 +87,7 @@ void render_canvas(Image& canvas) {
     }
 }
 
-bool invert_3x3(const double m[9], double inv[9]) {
-    const double c00 =  (m[4] * m[8] - m[5] * m[7]);
-    const double c01 = -(m[3] * m[8] - m[5] * m[6]);
-    const double c02 =  (m[3] * m[7] - m[4] * m[6]);
-    const double c10 = -(m[1] * m[8] - m[2] * m[7]);
-    const double c11 =  (m[0] * m[8] - m[2] * m[6]);
-    const double c12 = -(m[0] * m[7] - m[1] * m[6]);
-    const double c20 =  (m[1] * m[5] - m[2] * m[4]);
-    const double c21 = -(m[0] * m[5] - m[2] * m[3]);
-    const double c22 =  (m[0] * m[4] - m[1] * m[3]);
-    const double det = m[0] * c00 + m[1] * c01 + m[2] * c02;
-    if (std::fabs(det) < 1e-12) return false;
-    const double id = 1.0 / det;
-    inv[0] = c00 * id; inv[1] = c10 * id; inv[2] = c20 * id;
-    inv[3] = c01 * id; inv[4] = c11 * id; inv[5] = c21 * id;
-    inv[6] = c02 * id; inv[7] = c12 * id; inv[8] = c22 * id;
-    return true;
-}
-
+// Nội suy song tuyến tính (Bilinear) để sinh ảnh B từ khung cảnh gốc
 void sample_bilinear(const Image& img, double u, double v, uint8_t out[3]) {
     const int x0 = std::max(0, std::min(img.width - 1, static_cast<int>(std::floor(u))));
     const int y0 = std::max(0, std::min(img.height - 1, static_cast<int>(std::floor(v))));
@@ -128,8 +110,8 @@ void sample_bilinear(const Image& img, double u, double v, uint8_t out[3]) {
     }
 }
 
+// Sinh cặp ảnh Trái (A) và Phải (B) ở độ phân giải W x H kèm file Ground-Truth Homography
 void generate_pair(const std::string& prefix, int W, int H) {
-    // Master scene canvas wider & taller than single view
     const int CW = static_cast<int>(W * 1.8);
     const int CH = static_cast<int>(H * 1.3);
     Image canvas = Image::allocate(CW, CH, 3);
@@ -138,7 +120,7 @@ void generate_pair(const std::string& prefix, int W, int H) {
     const int ox = static_cast<int>(W * 0.1);
     const int oy = static_cast<int>(H * 0.15);
 
-    // Image A is cropped from canvas at (ox, oy)
+    // Cắt ảnh A trực tiếp từ khung cảnh tổng tại vị trí (ox, oy)
     Image imgA = Image::allocate(W, H, 3);
     for (int y = 0; y < H; ++y) {
         for (int x = 0; x < W; ++x) {
@@ -148,9 +130,9 @@ void generate_pair(const std::string& prefix, int W, int H) {
         }
     }
 
-    // Ground-truth Homography H_gt mapping p_B -> p_A:
-    // Horizontal shift ~ 35% of W, slight rotation (2 degrees), slight perspective
-    const double theta = 0.035; // ~2.0 degrees
+    // Ma trận Ground-Truth Homography H_gt ánh xạ p_B -> p_A:
+    // Dịch ngang 35% chiều rộng, xoay ~2 độ và biến dạng phối cảnh nhẹ
+    const double theta = 0.035;
     const double cos_t = std::cos(theta);
     const double sin_t = std::sin(theta);
     const double tx = 0.35 * W;
@@ -167,12 +149,10 @@ void generate_pair(const std::string& prefix, int W, int H) {
     Image imgB = Image::allocate(W, H, 3);
     for (int yB = 0; yB < H; ++yB) {
         for (int xB = 0; xB < W; ++xB) {
-            // Map (xB, yB) -> (xA, yA) via H_gt
             const double w = H_gt[6] * xB + H_gt[7] * yB + H_gt[8];
             const double xA = (H_gt[0] * xB + H_gt[1] * yB + H_gt[2]) / w;
             const double yA = (H_gt[3] * xB + H_gt[4] * yB + H_gt[5]) / w;
 
-            // Map (xA, yA) -> canvas coordinates (xA + ox, yA + oy)
             uint8_t* dst = imgB.data + (static_cast<size_t>(yB) * W + xB) * 3;
             sample_bilinear(canvas, xA + ox, yA + oy, dst);
         }
